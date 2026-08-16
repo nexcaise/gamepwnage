@@ -1,0 +1,129 @@
+name: Build GamePwnage
+
+on:
+  push:
+    branches:
+      - "**"
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Build ${{ matrix.abi }}
+    runs-on: ubuntu-latest
+
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - abi: arm64-v8a
+            arch: aarch64
+          - abi: armeabi-v7a
+            arch: arm
+          - abi: x86
+            arch: i686
+          - abi: x86_64
+            arch: x86_64
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Install Android NDK
+        uses: android-actions/ndk-install@v1
+        with:
+          ndkVersion: 27.2.12479018
+
+      - name: Configure CMake
+        run: |
+          cmake -S . \
+            -B build/${{ matrix.abi }} \
+            -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_TOOLCHAIN_FILE="$ANDROID_NDK_HOME/build/cmake/android.toolchain.cmake" \
+            -DANDROID_ABI="${{ matrix.abi }}" \
+            -DANDROID_PLATFORM=android-28 \
+            -DGAMEPWNAGE_BUILD_SHARED=OFF \
+            -DGAMEPWNAGE_DEBUG=OFF \
+            -DGAMEPWNAGE_ENABLE_SIMD=OFF \
+            -DCMAKE_INSTALL_PREFIX="$GITHUB_WORKSPACE/output/${{ matrix.abi }}"
+
+      - name: Build
+        run: |
+          cmake --build build/${{ matrix.abi }} --parallel
+
+      - name: Install
+        run: |
+          cmake --install build/${{ matrix.abi }}
+
+      - name: Prepare package
+        run: |
+          mkdir -p package/${{ matrix.abi }}/lib
+          mkdir -p package/${{ matrix.abi }}/include
+
+          cp build/${{ matrix.abi }}/libgamepwnage.a \
+            package/${{ matrix.abi }}/lib/
+
+          cp -r include/gamepwnage \
+            package/${{ matrix.abi }}/include/
+
+          cp LICENSE \
+            package/${{ matrix.abi }}/
+
+      - name: Verify library
+        run: |
+          file package/${{ matrix.abi }}/lib/libgamepwnage.a
+          ls -lh package/${{ matrix.abi }}/lib/libgamepwnage.a
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: gamepwnage-${{ matrix.abi }}
+          path: package/${{ matrix.abi }}/
+
+  package:
+    name: Package all ABIs
+    runs-on: ubuntu-latest
+    needs: build
+
+    steps:
+      - name: Download arm64-v8a
+        uses: actions/download-artifact@v4
+        with:
+          name: gamepwnage-arm64-v8a
+          path: package/arm64-v8a
+
+      - name: Download armeabi-v7a
+        uses: actions/download-artifact@v4
+        with:
+          name: gamepwnage-armeabi-v7a
+          path: package/armeabi-v7a
+
+      - name: Download x86
+        uses: actions/download-artifact@v4
+        with:
+          name: gamepwnage-x86
+          path: package/x86
+
+      - name: Download x86_64
+        uses: actions/download-artifact@v4
+        with:
+          name: gamepwnage-x86_64
+          path: package/x86_64
+
+      - name: Create archive
+        run: |
+          cd package
+          zip -r ../gamepwnage-static-android.zip .
+
+      - name: Upload combined package
+        uses: actions/upload-artifact@v4
+        with:
+          name: gamepwnage-static-android
+          path: gamepwnage-static-android.zip
