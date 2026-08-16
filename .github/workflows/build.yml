@@ -13,83 +13,92 @@ permissions:
 jobs:
   build:
     name: Build ${{ matrix.abi }}
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
 
     strategy:
       fail-fast: false
       matrix:
-        include:
-          - abi: arm64-v8a
-            arch: aarch64
-          - abi: armeabi-v7a
-            arch: arm
-          - abi: x86
-            arch: i686
-          - abi: x86_64
-            arch: x86_64
+        abi:
+          - arm64-v8a
+          - armeabi-v7a
+          - x86
+          - x86_64
 
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
       - name: Setup Android SDK
-        uses: android-actions/setup-android@v3
-
-      - name: Install Android NDK
-        uses: android-actions/ndk-install@v1
+        uses: android-actions/setup-android@v4
         with:
-          ndkVersion: 27.2.12479018
+          packages: ""
+
+      - name: Install NDK
+        run: |
+          sdkmanager "ndk;27.3.13750724"
 
       - name: Configure CMake
         run: |
-          cmake -S . \
+          cmake \
+            -S . \
             -B build/${{ matrix.abi }} \
             -G Ninja \
             -DCMAKE_BUILD_TYPE=Release \
-            -DCMAKE_TOOLCHAIN_FILE="$ANDROID_NDK_HOME/build/cmake/android.toolchain.cmake" \
+            -DCMAKE_TOOLCHAIN_FILE="$ANDROID_SDK_ROOT/ndk/27.3.13750724/build/cmake/android.toolchain.cmake" \
             -DANDROID_ABI="${{ matrix.abi }}" \
             -DANDROID_PLATFORM=android-28 \
+            -DANDROID_STL=c++_static \
             -DGAMEPWNAGE_BUILD_SHARED=OFF \
             -DGAMEPWNAGE_DEBUG=OFF \
-            -DGAMEPWNAGE_ENABLE_SIMD=OFF \
-            -DCMAKE_INSTALL_PREFIX="$GITHUB_WORKSPACE/output/${{ matrix.abi }}"
+            -DGAMEPWNAGE_ENABLE_SIMD=OFF
 
       - name: Build
         run: |
-          cmake --build build/${{ matrix.abi }} --parallel
+          cmake \
+            --build build/${{ matrix.abi }} \
+            --parallel "$(nproc)"
 
-      - name: Install
+      - name: Locate static library
         run: |
-          cmake --install build/${{ matrix.abi }}
+          echo "Searching for generated static library..."
+          find build/${{ matrix.abi }} \
+            -type f \
+            \( -name "*.a" -o -name "libgamepwnage.a" \) \
+            -print
 
-      - name: Prepare package
+      - name: Package
         run: |
-          mkdir -p package/${{ matrix.abi }}/lib
-          mkdir -p package/${{ matrix.abi }}/include
+          mkdir -p output/${{ matrix.abi }}/lib
 
-          cp build/${{ matrix.abi }}/libgamepwnage.a \
-            package/${{ matrix.abi }}/lib/
+          LIB=$(find build/${{ matrix.abi }} \
+            -type f \
+            -name "libgamepwnage.a" \
+            | head -n 1)
 
-          cp -r include/gamepwnage \
-            package/${{ matrix.abi }}/include/
+          if [ -z "$LIB" ]; then
+            echo "ERROR: libgamepwnage.a was not generated."
+            exit 1
+          fi
 
-          cp LICENSE \
-            package/${{ matrix.abi }}/
+          cp "$LIB" output/${{ matrix.abi }}/lib/
 
-      - name: Verify library
-        run: |
-          file package/${{ matrix.abi }}/lib/libgamepwnage.a
-          ls -lh package/${{ matrix.abi }}/lib/libgamepwnage.a
+          if [ -d include ]; then
+            cp -r include output/${{ matrix.abi }}/
+          fi
 
-      - name: Upload artifact
+          if [ -f LICENSE ]; then
+            cp LICENSE output/${{ matrix.abi }}/
+          fi
+
+      - name: Upload static library
         uses: actions/upload-artifact@v4
         with:
           name: gamepwnage-${{ matrix.abi }}
-          path: package/${{ matrix.abi }}/
+          path: output/${{ matrix.abi }}/
 
   package:
-    name: Package all ABIs
-    runs-on: ubuntu-latest
+    name: Package Android libraries
+    runs-on: ubuntu-24.04
     needs: build
 
     steps:
@@ -117,7 +126,7 @@ jobs:
           name: gamepwnage-x86_64
           path: package/x86_64
 
-      - name: Create archive
+      - name: Create ZIP
         run: |
           cd package
           zip -r ../gamepwnage-static-android.zip .
