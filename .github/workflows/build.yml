@@ -1,138 +1,86 @@
-name: Build GamePwnage
+name: Build Android (.a)
 
 on:
   push:
-    branches:
-      - "**"
+    branches: [master, main]
+    tags: ["v*"]
   pull_request:
   workflow_dispatch:
 
 permissions:
-  contents: read
+  contents: write
+
+env:
+  ANDROID_API: 24
 
 jobs:
   build:
     name: Build ${{ matrix.abi }}
-    runs-on: ubuntu-24.04
-
+    runs-on: ubuntu-latest
     strategy:
       fail-fast: false
       matrix:
-        abi:
-          - arm64-v8a
-          - armeabi-v7a
-          - x86
-          - x86_64
+        abi: [arm64-v8a, x86_64]
 
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Setup Android SDK
-        uses: android-actions/setup-android@v4
-        with:
-          packages: ""
-
-      - name: Install NDK
+      - name: Configure (CMake + Android NDK)
         run: |
-          sdkmanager "ndk;27.3.13750724"
-
-      - name: Configure CMake
-        run: |
-          cmake \
-            -S . \
-            -B build/${{ matrix.abi }} \
-            -G Ninja \
+          cmake -S . -B build/${{ matrix.abi }} -G Ninja \
+            -DCMAKE_TOOLCHAIN_FILE="$ANDROID_NDK_LATEST_HOME/build/cmake/android.toolchain.cmake" \
+            -DANDROID_ABI=${{ matrix.abi }} \
+            -DANDROID_PLATFORM=android-${{ env.ANDROID_API }} \
             -DCMAKE_BUILD_TYPE=Release \
-            -DCMAKE_TOOLCHAIN_FILE="$ANDROID_SDK_ROOT/ndk/27.3.13750724/build/cmake/android.toolchain.cmake" \
-            -DANDROID_ABI="${{ matrix.abi }}" \
-            -DANDROID_PLATFORM=android-28 \
-            -DANDROID_STL=c++_static \
             -DGAMEPWNAGE_BUILD_SHARED=OFF \
-            -DGAMEPWNAGE_DEBUG=OFF \
-            -DGAMEPWNAGE_ENABLE_SIMD=OFF
+            -DCMAKE_INSTALL_PREFIX="$PWD/out/${{ matrix.abi }}"
 
       - name: Build
-        run: |
-          cmake \
-            --build build/${{ matrix.abi }} \
-            --parallel "$(nproc)"
+        run: cmake --build build/${{ matrix.abi }} --parallel
 
-      - name: Locate static library
+      - name: Install (lib + headers)
+        run: cmake --install build/${{ matrix.abi }}
+
+      - name: Verify architecture
         run: |
-          echo "Searching for generated static library..."
-          find build/${{ matrix.abi }} \
-            -type f \
-            \( -name "*.a" -o -name "libgamepwnage.a" \) \
-            -print
+          LLVM_BIN="$ANDROID_NDK_LATEST_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin"
+          ls -lh out/${{ matrix.abi }}/lib/libgamepwnage.a
+          "$LLVM_BIN/llvm-readelf" -h out/${{ matrix.abi }}/lib/libgamepwnage.a | grep -m1 -E "Machine"
 
       - name: Package
         run: |
-          mkdir -p output/${{ matrix.abi }}/lib
+          mkdir -p dist/${{ matrix.abi }}
+          cp out/${{ matrix.abi }}/lib/libgamepwnage.a dist/${{ matrix.abi }}/
+          cp -r out/${{ matrix.abi }}/include dist/${{ matrix.abi }}/include
+          cp LICENSE dist/${{ matrix.abi }}/
 
-          LIB=$(find build/${{ matrix.abi }} \
-            -type f \
-            -name "libgamepwnage.a" \
-            | head -n 1)
-
-          if [ -z "$LIB" ]; then
-            echo "ERROR: libgamepwnage.a was not generated."
-            exit 1
-          fi
-
-          cp "$LIB" output/${{ matrix.abi }}/lib/
-
-          if [ -d include ]; then
-            cp -r include output/${{ matrix.abi }}/
-          fi
-
-          if [ -f LICENSE ]; then
-            cp LICENSE output/${{ matrix.abi }}/
-          fi
-
-      - name: Upload static library
+      - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: gamepwnage-${{ matrix.abi }}
-          path: output/${{ matrix.abi }}/
+          name: libgamepwnage-android-${{ matrix.abi }}
+          path: dist/${{ matrix.abi }}
+          if-no-files-found: error
 
-  package:
-    name: Package Android libraries
-    runs-on: ubuntu-24.04
+  release:
+    name: Publish release
+    if: startsWith(github.ref, 'refs/tags/v')
     needs: build
-
+    runs-on: ubuntu-latest
     steps:
-      - name: Download arm64-v8a
+      - name: Download artifacts
         uses: actions/download-artifact@v4
         with:
-          name: gamepwnage-arm64-v8a
-          path: package/arm64-v8a
+          path: artifacts
 
-      - name: Download armeabi-v7a
-        uses: actions/download-artifact@v4
-        with:
-          name: gamepwnage-armeabi-v7a
-          path: package/armeabi-v7a
-
-      - name: Download x86
-        uses: actions/download-artifact@v4
-        with:
-          name: gamepwnage-x86
-          path: package/x86
-
-      - name: Download x86_64
-        uses: actions/download-artifact@v4
-        with:
-          name: gamepwnage-x86_64
-          path: package/x86_64
-
-      - name: Create ZIP
+      - name: Zip per ABI
         run: |
-          cd package
-          zip -r ../gamepwnage-static-android.zip .
+          cd artifacts
+          for d in libgamepwnage-android-*; do
+            (cd "$d" && zip -r "../$d.zip" .)
+          done
 
-      - name: Upload combined package
-        uses: actions/upload-artifact@v4
+      - name: Create release
+        uses: softprops/action-gh-release@v2
         with:
-          name: gamepwnage-static-android
-          path: gamepwnage-static-android.zip
+          files: artifacts/*.zip
