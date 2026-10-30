@@ -18,60 +18,44 @@
 #endif
 #endif
 
-#include <stdio.h>
-#include <stdlib.h>
-#include <unistd.h>
 #include <stdint.h>
 #include <stdbool.h>
-#include <errno.h>
-#include <sys/mman.h>
+#include <stdlib.h>
 #include <string.h>
+#include <limits.h>
 
+#include "mem.h"
 #include "hook86.h"
-#include "proc.h"
 
-/*
-x86_32 hook -- atleast 5 bytes required to place a hook
-            -- no gp registers will be modified
-
-RETURNS     -- the address where the hook should jmp back
-*/
-GPWNAPI uintptr_t hook_x86(void *AddresstoHook, void *hookFunAddr, size_t len)
+GPWNAPI uintptr_t hook_x86(void *address, void *hook_function, size_t length)
 {
-    if (len < 5)
-    {
-        // not enough bytes
-        // fprintf(stderr, "hook_x86() error: not enough memory to place a hook\n");
+    uintptr_t patch_address = (uintptr_t)address;
+    uintptr_t target_address = (uintptr_t)hook_function;
+    uintptr_t next_instruction;
+    int64_t displacement;
+    int32_t relative;
+    uint8_t *patch;
+    bool success;
+
+    if (!address || !hook_function || length < 5 ||
+        patch_address > UINTPTR_MAX - 5)
         return 0;
-    }
 
-    // Get the system page size
-    size_t page_size = sysconf(_SC_PAGESIZE);
-    // Calculate the aligned address and size
-    uintptr_t addr = (uintptr_t)AddresstoHook;
-    uintptr_t aligned_addr = addr & ~(page_size - 1);
-    size_t aligned_size = ((addr + len + page_size - 1) & ~(page_size - 1)) - aligned_addr;
-    // the the current protection
-    int old_protection;
-    old_protection = get_prot(aligned_addr);
-    // Change memory protection to allow reading, writing, and executing
-    if (mprotect((void *) aligned_addr, aligned_size, PROT_READ | PROT_WRITE | PROT_EXEC) == -1)
-    {
-        // perror("Error changing memory protection");
+    next_instruction = patch_address + 5;
+    displacement = (int64_t)target_address - (int64_t)next_instruction;
+    if (displacement < INT32_MIN || displacement > INT32_MAX)
         return 0;
-    }
-    // patch nops
-    memset(AddresstoHook, 0x90, len);
 
-    uint32_t RelativeAddress = ((uintptr_t)hookFunAddr - ((uintptr_t)AddresstoHook + 5)); // get the relative address
+    patch = (uint8_t *)malloc(length);
+    if (!patch)
+        return 0;
 
-    *(unsigned char *)AddresstoHook = 0xE9; // copy jmp instruction
-    memcpy((void *)((uintptr_t)AddresstoHook + 1), &RelativeAddress, 4);
-    // Restore the previous permisssion
-    if (mprotect((void *) aligned_addr, len, old_protection) == -1)
-    {
-        // perror("Error changing memory protection");
-        // won't returns "0" as hook already placed
-    }
-    return (uintptr_t)AddresstoHook + len;
+    memset(patch, 0x90, length);
+    patch[0] = 0xE9;
+    relative = (int32_t)displacement;
+    memcpy(patch + 1, &relative, sizeof(relative));
+
+    success = write_mem(address, patch, length);
+    free(patch);
+    return success ? patch_address + length : 0;
 }

@@ -18,83 +18,42 @@
 #endif
 #endif
 
-#include <stdio.h>
-#include <stdlib.h>
-#include <unistd.h>
 #include <stdint.h>
 #include <stdbool.h>
-#include <errno.h>
-#include <sys/mman.h>
+#include <stdlib.h>
+#include <string.h>
 
+#include "mem.h"
 #include "nop.h"
-#include "proc.h"
 
-GPWNAPI bool patch_nop(void *Address, size_t len)
+GPWNAPI bool patch_nop(void *address, size_t length)
 {
-// check architecture and set-up as required
-#if defined(__x86_64__) || defined(__amd64__)
-    // Code specific to x86_64
-    static const unsigned char nopBytes[1] = {0x90};
-    static const size_t nopBytes_len = 1;
-#elif defined(__i386__) || defined(__i686__) || defined (__x86__)
-    // Code specific to x86 (32-bit)
-    static const unsigned char nopBytes[1] = {0x90};
-    static const size_t nopBytes_len = 1;
+#if defined(__x86_64__) || defined(__amd64__) || defined(__i386__) || defined(__i686__) || defined(__x86__)
+    static const uint8_t nop_bytes[] = { 0x90 };
 #elif defined(__aarch64__)
-    // Code specific to AArch64
-    static const unsigned char nopBytes[4] = {0x1f, 0x20, 0x03, 0xd5};
-    static const size_t nopBytes_len = 4;
+    static const uint8_t nop_bytes[] = { 0x1f, 0x20, 0x03, 0xd5 };
 #elif defined(__arm__)
-    // Code specific to 32-bit ARM
-    static const unsigned char nopBytes[4] = {0x00, 0xF0, 0x20, 0xE3};
-    static const size_t nopBytes_len = 4;
+    static const uint8_t nop_bytes[] = { 0x00, 0xf0, 0x20, 0xe3 };
 #else
-    #error "Unsupported architecture."
+#error "Unsupported architecture."
 #endif
+    const size_t nop_length = sizeof(nop_bytes);
+    uint8_t *patch;
+    bool success;
 
-    if((len % nopBytes_len) != 0)
-    {
-        //If invalid length
-        // fprintf(stderr, "[!] %s@%s: Invalid nop length specified at address 0x%lX! (must be a multiple of %d)", 
-        //     "PatchNop", "gamepwnage", (uintptr_t)Address, (int)nopBytes_len);
+    if (!length)
+        return true;
+    if (!address || length % nop_length != 0)
         return false;
-    }
-    
-   // Get the system page size
-    size_t page_size = sysconf(_SC_PAGESIZE);
-    
-    // Calculate the aligned address and size
-    uintptr_t addr = (uintptr_t)Address;
-    uintptr_t aligned_addr = addr & ~(page_size - 1);
-    size_t aligned_size = ((addr + len + page_size - 1) & ~(page_size - 1)) - aligned_addr;
 
-    int old_protection = get_prot(aligned_addr);
-
-    // Change memory protection to allow reading, writing, and executing
-    if (mprotect((void *)aligned_addr, aligned_size, PROT_READ | PROT_WRITE | PROT_EXEC) == -1)
-    {
-        // perror("[X] PatchNop: Error changing memory protection");
+    patch = (uint8_t *)malloc(length);
+    if (!patch)
         return false;
-    }
 
-    for (int n=0; n < (len/nopBytes_len); n++)
-    {
-        //copy nop bytes
-        // memcpy(Address, nopBytes, nopBytes_len);
-        // avoid calling memcpy as it might take extra cpu cycles
-        for (int j=0; j < nopBytes_len; j++)
-        {
-            ((unsigned char*)Address)[j] = nopBytes[j];
-        }
-        Address += nopBytes_len;
-    }
+    for (size_t offset = 0; offset < length; offset += nop_length)
+        memcpy(patch + offset, nop_bytes, nop_length);
 
-    // Restore the original memory protection
-    if (mprotect((void *)aligned_addr, aligned_size, old_protection) == -1)
-    {
-        // perror("[X] PatchNop: Error restoring memory protection");
-        return false;
-    }
-
-    return true;
+    success = write_mem(address, patch, length);
+    free(patch);
+    return success;
 }

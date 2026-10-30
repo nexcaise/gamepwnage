@@ -8,6 +8,7 @@ project(gamepwnage
 
 include(GNUInstallDirs)
 include(CMakePackageConfigHelpers)
+include(CTest)
 
 if(BUILD_SHARED_LIB MATCHES "true")
     set(GAMEPWNAGE_BUILD_SHARED ON CACHE BOOL "" FORCE)
@@ -110,6 +111,14 @@ endif()
 
 if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
     target_link_libraries(gamepwnage PRIVATE dl)
+endif()
+
+if(BUILD_TESTING AND (CMAKE_SYSTEM_PROCESSOR MATCHES "x86_64" OR CMAKE_SYSTEM_PROCESSOR MATCHES "AMD64"))
+    add_executable(gamepwnage_regression_x86 tests/regression_x86.c)
+    target_link_libraries(gamepwnage_regression_x86 PRIVATE gamepwnage)
+    target_include_directories(gamepwnage_regression_x86 PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/include/gamepwnage)
+    add_test(NAME gamepwnage_regression_x86 COMMAND gamepwnage_regression_x86)
 endif()
 
 install(

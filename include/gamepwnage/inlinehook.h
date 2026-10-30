@@ -35,7 +35,7 @@ typedef struct {
 #if defined(__aarch64__)
 #define GPWN_AARCH64_LEGACYHOOK 0x1 /* 5 instructions, 20 bytes */
 #define GPWN_AARCH64_MICROHOOK  0x2 /* 3 instructions, 12 bytes */
-#define GPWN_AARCH64_NANOHOOK   0x3 /* 1 instructions, 4 bytes  */
+#define GPWN_AARCH64_NANOHOOK   0x4 /* 1 instruction, 4 bytes */
 #elif defined(__arm__)
 #define GPWN_ARM_LEGACYHOOK     0x1 /* 3 instructions, 12 bytes */
 #define GPWN_ARM_NANOHOOK       0x2 /* 1 instructions, 4 bytes  */
@@ -46,6 +46,10 @@ typedef struct {
 #define GPWN_X86_SHORTHOOK      0x1 /* 5 bytes minimum */
 #endif
 
+/* flags == 0 selects the most suitable hook type. Unsupported PC-relative
+ * instructions or out-of-range relocations cause hook_addr() to fail safely.
+ * The caller must quiesce threads executing the target while installing or
+ * removing a hook; this library does not suspend other threads. */
 GPWNAPI hook_handle* hook_addr(void *address, void *fake, void **original_func, int flags);
 GPWNAPI bool rm_hook(hook_handle *handle);
 
